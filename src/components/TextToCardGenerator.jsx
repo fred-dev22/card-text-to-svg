@@ -1,11 +1,13 @@
 import React, { useState } from 'react';
-import { Download, Plus, Trash2, FileText } from 'lucide-react';
+import { Download, Plus, Trash2, FileText, Upload } from 'lucide-react';
 import './TextToCardGenerator.css';
 
 const TextToCardGenerator = () => {
   const [textList, setTextList] = useState(['']);
   const [fontSizes, setFontSizes] = useState([24]); // taille de police par défaut
   const [isGenerating, setIsGenerating] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [importText, setImportText] = useState('');
 
   const addTextInput = () => {
     setTextList([...textList, '']);
@@ -33,22 +35,47 @@ const TextToCardGenerator = () => {
     setFontSizes(newSizes);
   };
 
-  const wrapText = (text, maxWidth, fontSize) => {
-    const words = text.split(' ');
-    const lines = [];
-    let currentLine = words[0];
+  // Fonction pour échapper les caractères spéciaux pour le SVG
+  const escapeForSVG = (str) => {
+    return str
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  };
 
-    for (let i = 1; i < words.length; i++) {
-      const word = words[i];
-      const width = (currentLine + ' ' + word).length * (fontSize * 0.6); // Utilisation de fontSize pour calculer la largeur
-      if (width < maxWidth) {
-        currentLine += ' ' + word;
-      } else {
-        lines.push(currentLine);
-        currentLine = word;
+  // Nouvelle version de wrapText qui force le retour à la ligne même pour les mots trop longs
+  const wrapText = (text, maxWidth, fontSize) => {
+    const paragraphs = text.split('\n');
+    const lines = [];
+    const charWidth = fontSize * 0.6;
+    const maxChars = Math.floor(maxWidth / charWidth);
+
+    for (const paragraph of paragraphs) {
+      let words = paragraph.split(' ');
+      let currentLine = '';
+      for (let i = 0; i < words.length; i++) {
+        let word = words[i];
+        // Si le mot est trop long, on le coupe
+        while (word.length > maxChars) {
+          if (currentLine.length > 0) {
+            lines.push(currentLine);
+            currentLine = '';
+          }
+          lines.push(word.slice(0, maxChars));
+          word = word.slice(maxChars);
+        }
+        const testLine = currentLine ? currentLine + ' ' + word : word;
+        if (testLine.length > maxChars) {
+          if (currentLine) lines.push(currentLine);
+          currentLine = word;
+        } else {
+          currentLine = testLine;
+        }
       }
+      if (currentLine) lines.push(currentLine);
     }
-    lines.push(currentLine);
     return lines;
   };
 
@@ -64,10 +91,10 @@ const TextToCardGenerator = () => {
     const cardH = height - border * 2;
     const bgColor = '#e4e6eb';
     const maxTextW = cardW - innerPadding * 2;
-    const maxTextH = cardH - innerPadding * 2 - 32; // espace pour le lien et le numéro
+    const maxTextH = cardH - innerPadding * 2 - 32;
     const fontSize = fontSizes[index] || 24;
 
-    // Fonction pour calculer la taille de police optimale (pour occuper au max la zone grise)
+    // Fonction pour calculer la taille de police optimale
     const findOptimalFontSize = (text, maxWidth, maxHeight) => {
       let bestFontSize = 12;
       let bestFit = 0;
@@ -94,13 +121,22 @@ const TextToCardGenerator = () => {
     const totalTextHeight = lines.length * lineHeight;
     const startY = cardY + innerPadding + (maxTextH - totalTextHeight) / 2;
 
+    // Fonction pour convertir le texte en SVG avec support du markdown
+    const convertTextToSVG = (text) => {
+      // Remplacer les marqueurs markdown par des balises SVG
+      let svgText = escapeForSVG(text)
+        .replace(/\*\*(.*?)\*\*/g, '<tspan font-weight="bold">$1</tspan>')
+        .replace(/\*(.*?)\*/g, '<tspan font-style="italic">$1</tspan>');
+      return svgText;
+    };
+
     // SVG adapté à la nouvelle taille, texte aligné à gauche, fond gris dans la carte
     const svgContent = `
       <svg width="${width}" height="${height}" viewBox="0 0 700 400" xmlns="http://www.w3.org/2000/svg">
         <rect width="100%" height="100%" fill="#fff" />
         <rect x="${cardX}" y="${cardY}" width="${cardW}" height="${cardH}" rx="${radius}" ry="${radius}" fill="${bgColor}" stroke="#d80621" stroke-width="3" />
         <g font-family="Arial, sans-serif" font-size="${fontSize}" fill="#222">
-          ${lines.map((line, i) => `<text x="${cardX + innerPadding}" y="${startY + (i * lineHeight)}" dominant-baseline="hanging">${line}</text>`).join('')}
+          ${lines.map((line, i) => `<text x="${cardX + innerPadding}" y="${startY + (i * lineHeight)}" dominant-baseline="hanging">${convertTextToSVG(line)}</text>`).join('')}
         </g>
         <text x="${cardX + cardW - innerPadding}" y="${cardY + cardH - 16}" font-family="Arial, sans-serif" font-size="16" font-weight="bold" fill="#d80621" text-anchor="end">www.prepartcfcanada.fr</text>
       </svg>
@@ -154,6 +190,28 @@ const TextToCardGenerator = () => {
     setIsGenerating(false);
   };
 
+  const extractTextsFromImport = () => {
+    // Expression régulière pour trouver les textes entre guillemets
+    const regex = /Texte : "([^"]+)"/g;
+    const matches = [...importText.matchAll(regex)];
+    
+    if (matches.length > 0) {
+      const extractedTexts = matches.map(match => {
+        // Nettoyer le texte : remplacer les sauts de ligne par des espaces et supprimer les espaces multiples
+        return match[1]
+          .replace(/\n/g, ' ')  // Remplacer les sauts de ligne par des espaces
+          .replace(/\s+/g, ' ') // Remplacer les espaces multiples par un seul espace
+          .trim();              // Supprimer les espaces au début et à la fin
+      });
+      setTextList(extractedTexts);
+      setFontSizes(new Array(extractedTexts.length).fill(24));
+      setShowImportModal(false);
+      setImportText('');
+    } else {
+      alert('Aucun texte entre guillemets trouvé dans le texte importé.');
+    }
+  };
+
   return (
     <div className="text-card-generator-container">
       <div className="tcg-header">
@@ -165,6 +223,47 @@ const TextToCardGenerator = () => {
           <div className="tcg-subtitle">Créez des cartes élégantes à partir de votre texte</div>
         </div>
       </div>
+
+      {/* Bouton d'import */}
+      <div style={{ marginBottom: 20 }}>
+        <button
+          onClick={() => setShowImportModal(true)}
+          className="tcg-btn tcg-btn-blue"
+        >
+          <Upload size={20} /> Importer depuis texte
+        </button>
+      </div>
+
+      {/* Modal d'import */}
+      {showImportModal && (
+        <div className="tcg-modal-overlay">
+          <div className="tcg-modal">
+            <h2>Importer des textes</h2>
+            <p>Collez votre texte contenant les questions. Les textes entre guillemets seront automatiquement extraits.</p>
+            <textarea
+              value={importText}
+              onChange={(e) => setImportText(e.target.value)}
+              placeholder="Collez votre texte ici..."
+              style={{ width: '100%', height: '300px', margin: '20px 0' }}
+            />
+            <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => setShowImportModal(false)}
+                className="tcg-btn tcg-btn-red"
+              >
+                Annuler
+              </button>
+              <button
+                onClick={extractTextsFromImport}
+                className="tcg-btn tcg-btn-green"
+              >
+                Extraire les textes
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="tcg-card-list">
         {textList.map((text, index) => (
           <div key={index} className="tcg-card">
@@ -175,6 +274,7 @@ const TextToCardGenerator = () => {
                   value={text}
                   onChange={(e) => updateText(index, e.target.value)}
                   placeholder="Entrez votre texte ici..."
+                  style={{ width: '400px', height: '200px' }}
                 />
                 <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
                   <label style={{ fontSize: 13, color: '#555' }}>Taille du texte :</label>
