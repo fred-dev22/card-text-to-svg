@@ -8,6 +8,8 @@ const TextToCardGenerator = () => {
   const [isGenerating, setIsGenerating] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
   const [importText, setImportText] = useState('');
+  const [extractedQuestions, setExtractedQuestions] = useState([]);
+  const [showQuestionsModal, setShowQuestionsModal] = useState(false);
 
   const addTextInput = () => {
     setTextList([...textList, '']);
@@ -190,26 +192,72 @@ const TextToCardGenerator = () => {
     setIsGenerating(false);
   };
 
-  const extractTextsFromImport = () => {
-    // Expression régulière pour trouver les textes entre guillemets
-    const regex = /Texte : "([^"]+)"/g;
-    const matches = [...importText.matchAll(regex)];
-    
-    if (matches.length > 0) {
-      const extractedTexts = matches.map(match => {
-        // Nettoyer le texte : remplacer les sauts de ligne par des espaces et supprimer les espaces multiples
-        return match[1]
-          .replace(/\n/g, ' ')  // Remplacer les sauts de ligne par des espaces
-          .replace(/\s+/g, ' ') // Remplacer les espaces multiples par un seul espace
-          .trim();              // Supprimer les espaces au début et à la fin
+  const extractQuestionsAndOptions = (text) => {
+    const questions = [];
+    // On ne prend que les blocs Question : ... + options, on ignore tout le reste
+    const regex = /Question\s*:\s*(.*?)\nA\.\s*(.*?)\nB\.\s*(.*?)(?:\s*✓\s*\(CORRECTE\))?\nC\.\s*(.*?)\nD\.\s*(.*?)(?=\n|$)/gs;
+    let match;
+    while ((match = regex.exec(text)) !== null) {
+      const [_, question, optionA, optionB, optionC, optionD] = match;
+      questions.push({
+        question: question.trim(),
+        options: [
+          { text: optionA.trim(), isCorrect: optionA.includes('✓') },
+          { text: optionB.trim(), isCorrect: optionB.includes('✓') },
+          { text: optionC.trim(), isCorrect: optionC.includes('✓') },
+          { text: optionD.trim(), isCorrect: optionD.includes('✓') }
+        ]
       });
+    }
+    return questions;
+  };
+
+  const formatQuestionsForCopy = (questions) => {
+    return questions.map((q, index) => {
+      const options = q.options.map(opt => 
+        opt.isCorrect ? `${opt.text.replace('✓ (CORRECTE)', '').trim()} ✓ (CORRECTE)` : opt.text.replace('✓ (CORRECTE)', '').trim()
+      );
+      return `{
+ question ${index + 1}: "${q.question}"
+ ${options.join('\n ')}
+}`;
+    }).join('\n\n');
+  };
+
+  const extractTextsFromImport = () => {
+    // On extrait les textes pour les cartes
+    const regexText = /Texte\s*:\s*"([^"]+)"/g;
+    const matches = [...importText.matchAll(regexText)];
+    let extractedTexts = [];
+    if (matches.length > 0) {
+      extractedTexts = matches.map(match => match[1]
+        .replace(/\n/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+      );
       setTextList(extractedTexts);
       setFontSizes(new Array(extractedTexts.length).fill(24));
+    }
+    // On extrait les questions pour la modale
+    const questions = extractQuestionsAndOptions(importText);
+    if (questions.length > 0) {
+      setExtractedQuestions(questions);
+      setShowQuestionsModal(true);
+      setShowImportModal(false);
+      setImportText('');
+    } else if (extractedTexts.length > 0) {
+      // Si pas de questions mais des textes, juste fermer la modale
       setShowImportModal(false);
       setImportText('');
     } else {
-      alert('Aucun texte entre guillemets trouvé dans le texte importé.');
+      alert('Aucun texte ou question trouvée dans le texte importé.');
     }
+  };
+
+  const copyFormattedQuestions = () => {
+    const formattedText = formatQuestionsForCopy(extractedQuestions);
+    navigator.clipboard.writeText(formattedText);
+    alert('Questions copiées dans le presse-papier !');
   };
 
   return (
@@ -230,7 +278,7 @@ const TextToCardGenerator = () => {
           onClick={() => setShowImportModal(true)}
           className="tcg-btn tcg-btn-blue"
         >
-          <Upload size={20} /> Importer depuis texte
+          <Upload size={20} /> Extraire les questions
         </button>
       </div>
 
@@ -238,8 +286,8 @@ const TextToCardGenerator = () => {
       {showImportModal && (
         <div className="tcg-modal-overlay">
           <div className="tcg-modal">
-            <h2>Importer des textes</h2>
-            <p>Collez votre texte contenant les questions. Les textes entre guillemets seront automatiquement extraits.</p>
+            <h2>Extraire les questions</h2>
+            <p>Collez votre texte contenant les questions. Les questions et leurs options seront automatiquement extraites.</p>
             <textarea
               value={importText}
               onChange={(e) => setImportText(e.target.value)}
@@ -257,7 +305,43 @@ const TextToCardGenerator = () => {
                 onClick={extractTextsFromImport}
                 className="tcg-btn tcg-btn-green"
               >
-                Extraire les textes
+                Extraire les questions
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal pour afficher les questions extraites */}
+      {showQuestionsModal && (
+        <div className="tcg-modal-overlay">
+          <div className="tcg-modal" style={{ maxWidth: '800px' }}>
+            <h2>Questions extraites</h2>
+            <p>Voici les questions extraites du texte. Vous pouvez les copier dans le format souhaité.</p>
+            <div style={{ 
+              backgroundColor: '#f5f5f5', 
+              padding: '20px', 
+              borderRadius: '8px',
+              maxHeight: '400px',
+              overflowY: 'auto',
+              margin: '20px 0',
+              fontFamily: 'monospace',
+              whiteSpace: 'pre-wrap'
+            }}>
+              {formatQuestionsForCopy(extractedQuestions)}
+            </div>
+            <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => setShowQuestionsModal(false)}
+                className="tcg-btn tcg-btn-red"
+              >
+                Fermer
+              </button>
+              <button
+                onClick={copyFormattedQuestions}
+                className="tcg-btn tcg-btn-green"
+              >
+                Copier le format
               </button>
             </div>
           </div>
